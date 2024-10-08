@@ -19,7 +19,7 @@ namespace StinkySteak.NShooter.Netick.Transport
         UDP = 1,
         WebSocket = 2,
         RelayUDP = 3,
-        RelayWSS = 4,
+        RelayWebSocket = 4,
 
         /// <summary>
         /// Will determine protocol based on the platform selected
@@ -34,7 +34,7 @@ namespace StinkySteak.NShooter.Netick.Transport
         UDP = 1 << 0,
         WebSocket = 1 << 2,
         RelayUDP = 1 << 3,
-        RelayWSS = 1 << 4,
+        RelayWebSocket = 1 << 4,
     }
 
     [CreateAssetMenu(fileName = "UnityTransportProvider", menuName = "Netick/Transport/UnityTransportProvider", order = 1)]
@@ -44,8 +44,8 @@ namespace StinkySteak.NShooter.Netick.Transport
         [SerializeField] private ServerNetworkProtocol _serverProtocol;
         [SerializeField] private NetworkConfigParameter _parameters;
 
-        [Header("Websocket Secure")]
-        [SerializeField] private bool _webSocketUseEncryption;
+        [Header("Encryption")]
+        [SerializeField][Tooltip("Per default the client/server communication will not be encrypted. Select true to enable DTLS for UDP and TLS for Websocket.")] private bool _useEncryption;
 
         [Space]
         [SerializeField][TextArea(3, 10)] private string _serverCertificate;
@@ -86,7 +86,7 @@ namespace StinkySteak.NShooter.Netick.Transport
             NetickUnityTransport transport = new();
             transport.SetProtocol(GetClientNetworkProtocol(), _serverProtocol);
             transport.SetNetworkConfigParameter(_parameters);
-            transport.SetWebSocketEncryption(_webSocketUseEncryption);
+            transport.SetEncryption(_useEncryption);
             transport.SetServerSecrets(_serverCertificate, _serverPrivateKey);
             transport.SetClientSecrets(_serverCommonName, _clientCaCertificate);
 
@@ -113,7 +113,7 @@ namespace StinkySteak.NShooter.Netick.Transport
         public ServerNetworkProtocol ServerProtocol;
         public NetworkConfigParameter Parameters;
 
-        public bool WebSocketUseEncryption;
+        public bool UseEncryption;
 
         public string ServerCertificate;
         public string ServerPrivateKey;
@@ -127,9 +127,9 @@ namespace StinkySteak.NShooter.Netick.Transport
             Parameters = parameters;
         }
 
-        public void SetWebSocketEncryption(bool webSocketUseEncryption)
+        public void SetEncryption(bool useEncryption)
         {
-            WebSocketUseEncryption = webSocketUseEncryption;
+            UseEncryption = useEncryption;
         }
 
         public void SetServerSecrets(string serverCertificate, string serverPrivateKey)
@@ -211,6 +211,15 @@ namespace StinkySteak.NShooter.Netick.Transport
         private const string CONNECTION_TYPE_WS = "ws";
         private const string CONNECTION_TYPE_WSS = "wss";
 
+        public static Allocation Allocation;
+        public static JoinAllocation JoinAllocation;
+
+        private enum RelaySocket
+        {
+            UDP,
+            WebSocket
+        }
+
         public NetickUnityTransport()
         {
             _bytesBuffer = (byte*)UnsafeUtility.Malloc(_bytesBufferSize, 4, Unity.Collections.Allocator.Persistent);
@@ -228,23 +237,9 @@ namespace StinkySteak.NShooter.Netick.Transport
             _connections = new NativeList<Unity.Networking.Transport.NetworkConnection>(Engine.IsServer ? Engine.Config.MaxPlayers : 0, Unity.Collections.Allocator.Persistent);
         }
 
-        private NetworkDriver ConstructDriverUDP()
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return NetworkDriver.Create(new IPCNetworkInterface());
-#else
-
-            return NetworkDriver.Create(new UDPNetworkInterface(), GetNetworkSettings());
-#endif
-        }
-
-        public static Allocation Allocation;
-        public static JoinAllocation JoinAllocation;
-
         private NetworkDriver ConstructDriverRelay(string connectionType)
         {
             RelayServerData relayData;
-            relayData.is
 
             if (Engine.IsServer)
             {
@@ -255,24 +250,67 @@ namespace StinkySteak.NShooter.Netick.Transport
                 relayData = new RelayServerData(JoinAllocation, connectionType);
             }
 
-            NetworkSettings settings = GetNetworkSettings();
+            NetworkSettings settings = GetDefaultNetworkSettings();
             settings.WithRelayParameters(ref relayData);
 
             NetworkDriver driver = NetworkDriver.Create(settings);
             return driver;
         }
 
+        private string GetRelayConnectionType(RelaySocket socket, bool isSecure)
+        {
+            if (socket == RelaySocket.UDP)
+            {
+                if (!isSecure)
+                {
+                    return CONNECTION_TYPE_UDP;
+                }
+
+                return CONNECTION_TYPE_DTLS;
+            }
+
+
+            if (socket == RelaySocket.WebSocket)
+            {
+                if (!isSecure)
+                {
+                    return CONNECTION_TYPE_WS;
+                }
+
+                return CONNECTION_TYPE_WSS;
+            }
+
+            Debug.LogError("Failed to get relay connection type");
+            return string.Empty;
+        }
+
         private NetworkDriver ConstructDriverRelayUDP()
         {
-            return ConstructDriverRelay(CONNECTION_TYPE_UDP);
+            bool isSecure = UseEncryption;
+
+            string connectionType = GetRelayConnectionType(RelaySocket.UDP, isSecure);
+
+            return ConstructDriverRelay(connectionType);
         }
 
         private NetworkDriver ConstructDriverRelayWS()
         {
-            return ConstructDriverRelay(CONNECTION_TYPE_WS);
+            bool isSecure = UseEncryption;
+
+            string connectionType = GetRelayConnectionType(RelaySocket.WebSocket, isSecure);
+
+            return ConstructDriverRelay(connectionType);
         }
 
-        private NetworkSettings GetNetworkSettings()
+        private NetworkSettings GetNetworkSettings(bool isServer)
+        {
+            if (UseEncryption)
+                return GetSecureNetworkSettings(isServer);
+
+            return GetDefaultNetworkSettings();
+        }
+
+        private NetworkSettings GetDefaultNetworkSettings()
         {
             NetworkSettings settings = new NetworkSettings();
 
@@ -281,11 +319,9 @@ namespace StinkySteak.NShooter.Netick.Transport
             return settings;
         }
 
-        private NetworkSettings GetWebSocketSecureSettings(bool isServer)
+        private NetworkSettings GetSecureNetworkSettings(bool isServer)
         {
-            NetworkSettings settings = new NetworkSettings();
-
-            settings.AddRawParameterStruct(ref Parameters);
+            NetworkSettings settings = GetDefaultNetworkSettings();
 
             if (isServer)
             {
@@ -315,18 +351,20 @@ namespace StinkySteak.NShooter.Netick.Transport
             return settings;
         }
 
+        private NetworkDriver ConstructDriverUDP(bool isServer)
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return NetworkDriver.Create(new IPCNetworkInterface());
+#else
+            NetworkSettings networkSettings = GetNetworkSettings(isServer);
+
+            return NetworkDriver.Create(new UDPNetworkInterface(), networkSettings);
+#endif
+        }
+
         private NetworkDriver ConstructDriverWS(bool isServer)
         {
-            NetworkSettings networkSettings;
-
-            if (!WebSocketUseEncryption)
-            {
-                networkSettings = GetNetworkSettings();
-            }
-            else
-            {
-                networkSettings = GetWebSocketSecureSettings(isServer);
-            }
+            NetworkSettings networkSettings = GetNetworkSettings(isServer);
 
             return NetworkDriver.Create(new WebSocketNetworkInterface(), networkSettings);
         }
@@ -335,10 +373,10 @@ namespace StinkySteak.NShooter.Netick.Transport
         {
             bool isServer = mode == RunMode.Server;
 
-            NetworkDriver udpDriver = ConstructDriverUDP();
-            NetworkDriver wsDriver = ConstructDriverWS(isServer);
-            NetworkDriver relayUdpDriver = ConstructDriverRelayUDP();
-            NetworkDriver relayWssDriver = ConstructDriverRelayWS();
+            NetworkDriver driverUdp = ConstructDriverUDP(isServer);
+            NetworkDriver driverWs = ConstructDriverWS(isServer);
+            NetworkDriver driverRelayUdp = ConstructDriverRelayUDP();
+            NetworkDriver driverRelayWs = ConstructDriverRelayWS();
 
             MultiNetworkDriver multiDriver = MultiNetworkDriver.Create();
 
@@ -353,33 +391,33 @@ namespace StinkySteak.NShooter.Netick.Transport
 
                 if (ServerProtocol.HasFlag(ServerNetworkProtocol.UDP))
                 {
-                    BindAndListenDriverTo(in udpDriver, listenPort);
+                    BindAndListenDriverTo(in driverUdp, listenPort);
                     listenPort++;
                 }
 
                 if (ServerProtocol.HasFlag(ServerNetworkProtocol.WebSocket))
                 {
-                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    BindAndListenDriverTo(in driverWs, listenPort);
                     listenPort++;
                 }
 
                 if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayUDP))
                 {
-                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    BindAndListenDriverTo(in driverRelayUdp, listenPort);
                     listenPort++;
                 }
 
-                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayWSS))
+                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayWebSocket))
                 {
-                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    BindAndListenDriverTo(in driverRelayWs, listenPort);
                     listenPort++;
                 }
             }
 
-            multiDriver.AddDriver(udpDriver);
-            multiDriver.AddDriver(wsDriver);
-            multiDriver.AddDriver(relayUdpDriver);
-            multiDriver.AddDriver(relayWssDriver);
+            multiDriver.AddDriver(driverUdp);
+            multiDriver.AddDriver(driverWs);
+            multiDriver.AddDriver(driverRelayUdp);
+            multiDriver.AddDriver(driverRelayWs);
 
             _driver = multiDriver;
 
