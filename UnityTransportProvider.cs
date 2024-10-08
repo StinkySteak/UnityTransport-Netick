@@ -8,6 +8,8 @@ using Netick;
 using Netick.Unity;
 using static StinkySteak.NShooter.Netick.Transport.NetickUnityTransport;
 using Unity.Networking.Transport.TLS;
+using Unity.Networking.Transport.Relay;
+using Unity.Services.Relay.Models;
 
 namespace StinkySteak.NShooter.Netick.Transport
 {
@@ -16,18 +18,23 @@ namespace StinkySteak.NShooter.Netick.Transport
         None = 0,
         UDP = 1,
         WebSocket = 2,
+        RelayUDP = 3,
+        RelayWSS = 4,
 
         /// <summary>
         /// Will determine protocol based on the platform selected
         /// </summary>
-        Auto = 3,
+        Auto = 5,
     }
+
+    [Flags]
     public enum ServerNetworkProtocol
     {
         None = 0,
-        UDP = 1,
-        WebSocket = 2,
-        All = 3,
+        UDP = 1 << 0,
+        WebSocket = 1 << 2,
+        RelayUDP = 1 << 3,
+        RelayWSS = 1 << 4,
     }
 
     [CreateAssetMenu(fileName = "UnityTransportProvider", menuName = "Netick/Transport/UnityTransportProvider", order = 1)]
@@ -198,6 +205,12 @@ namespace StinkySteak.NShooter.Netick.Transport
         private byte[] _connectionRequestBytes = new byte[200];
         private NativeArray<byte> _connectionRequestNative = new NativeArray<byte>(200, Allocator.Persistent);
 
+        private const string CONNECTION_TYPE_UDP = "udp";
+        private const string CONNECTION_TYPE_DTLS = "dtls";
+
+        private const string CONNECTION_TYPE_WS = "ws";
+        private const string CONNECTION_TYPE_WSS = "wss";
+
         public NetickUnityTransport()
         {
             _bytesBuffer = (byte*)UnsafeUtility.Malloc(_bytesBufferSize, 4, Unity.Collections.Allocator.Persistent);
@@ -223,6 +236,40 @@ namespace StinkySteak.NShooter.Netick.Transport
 
             return NetworkDriver.Create(new UDPNetworkInterface(), GetNetworkSettings());
 #endif
+        }
+
+        public static Allocation Allocation;
+        public static JoinAllocation JoinAllocation;
+
+        private NetworkDriver ConstructDriverRelay(string connectionType)
+        {
+            RelayServerData relayData;
+            relayData.is
+
+            if (Engine.IsServer)
+            {
+                relayData = new RelayServerData(Allocation, connectionType);
+            }
+            else
+            {
+                relayData = new RelayServerData(JoinAllocation, connectionType);
+            }
+
+            NetworkSettings settings = GetNetworkSettings();
+            settings.WithRelayParameters(ref relayData);
+
+            NetworkDriver driver = NetworkDriver.Create(settings);
+            return driver;
+        }
+
+        private NetworkDriver ConstructDriverRelayUDP()
+        {
+            return ConstructDriverRelay(CONNECTION_TYPE_UDP);
+        }
+
+        private NetworkDriver ConstructDriverRelayWS()
+        {
+            return ConstructDriverRelay(CONNECTION_TYPE_WS);
         }
 
         private NetworkSettings GetNetworkSettings()
@@ -290,26 +337,49 @@ namespace StinkySteak.NShooter.Netick.Transport
 
             NetworkDriver udpDriver = ConstructDriverUDP();
             NetworkDriver wsDriver = ConstructDriverWS(isServer);
+            NetworkDriver relayUdpDriver = ConstructDriverRelayUDP();
+            NetworkDriver relayWssDriver = ConstructDriverRelayWS();
 
             MultiNetworkDriver multiDriver = MultiNetworkDriver.Create();
 
             if (Engine.IsServer)
             {
-                if (ServerProtocol == ServerNetworkProtocol.All)
+                int listenPort = port;
+
+                if (ServerProtocol == ServerNetworkProtocol.None)
                 {
-                    BindAndListenDriverTo(in udpDriver, port);
-                    BindAndListenDriverTo(in wsDriver, port + 1);
+                    throw new Exception($"No Server Protocol was chosen");
                 }
 
-                if (ServerProtocol == ServerNetworkProtocol.UDP)
-                    BindAndListenDriverTo(in udpDriver, port);
+                if (ServerProtocol.HasFlag(ServerNetworkProtocol.UDP))
+                {
+                    BindAndListenDriverTo(in udpDriver, listenPort);
+                    listenPort++;
+                }
 
-                if (ServerProtocol == ServerNetworkProtocol.WebSocket)
-                    BindAndListenDriverTo(in wsDriver, port);
+                if (ServerProtocol.HasFlag(ServerNetworkProtocol.WebSocket))
+                {
+                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    listenPort++;
+                }
+
+                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayUDP))
+                {
+                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    listenPort++;
+                }
+
+                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayWSS))
+                {
+                    BindAndListenDriverTo(in wsDriver, listenPort);
+                    listenPort++;
+                }
             }
 
             multiDriver.AddDriver(udpDriver);
             multiDriver.AddDriver(wsDriver);
+            multiDriver.AddDriver(relayUdpDriver);
+            multiDriver.AddDriver(relayWssDriver);
 
             _driver = multiDriver;
 
