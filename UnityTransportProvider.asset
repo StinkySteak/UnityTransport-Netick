@@ -15,17 +15,17 @@ MonoBehaviour:
   _clientProtocol: 0
   _serverProtocol: 0
   _parameters:
-    connectTimeoutMS: 0
-    maxConnectAttempts: 0
-    disconnectTimeoutMS: 0
-    heartbeatTimeoutMS: 0
-    reconnectionTimeoutMS: 0
+    connectTimeoutMS: 1000
+    maxConnectAttempts: 60
+    disconnectTimeoutMS: 30000
+    heartbeatTimeoutMS: 500
+    reconnectionTimeoutMS: 2000
     maxFrameTimeMS: 0
     fixedFrameTimeMS: 0
-    receiveQueueCapacity: 0
-    sendQueueCapacity: 0
-    maxMessageSize: 0
-  _webSocketUseEncryption: 0
+    receiveQueueCapacity: 512
+    sendQueueCapacity: 512
+    maxMessageSize: 1400
+  _useEncryption: 0
   _serverCertificate: 
   _serverPrivateKey: 
   _serverCommonName: 

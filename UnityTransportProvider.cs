@@ -10,6 +10,7 @@ using static StinkySteak.NShooter.Netick.Transport.NetickUnityTransport;
 using Unity.Networking.Transport.TLS;
 using Unity.Networking.Transport.Relay;
 using Unity.Services.Relay.Models;
+using Unity.Jobs;
 
 namespace StinkySteak.NShooter.Netick.Transport
 {
@@ -243,10 +244,20 @@ namespace StinkySteak.NShooter.Netick.Transport
 
             if (Engine.IsServer)
             {
+                if (Allocation == null)
+                {
+                    throw new Exception("Relay Allocation Request is null");
+                }
+
                 relayData = new RelayServerData(Allocation, connectionType);
             }
             else
             {
+                if (JoinAllocation == null)
+                {
+                    throw new Exception("Relay Join Allocation is null");
+                }
+
                 relayData = new RelayServerData(JoinAllocation, connectionType);
             }
 
@@ -369,55 +380,159 @@ namespace StinkySteak.NShooter.Netick.Transport
             return NetworkDriver.Create(new WebSocketNetworkInterface(), networkSettings);
         }
 
+        private struct NetworkDriverCollections
+        {
+            public NetworkDriver DriverUdp;
+            public NetworkDriver DriverWs;
+            public NetworkDriver DriverRelayUdp;
+            public NetworkDriver DriverRelayWs;
+
+            public static NetworkDriverCollections ConstructDummy()
+            {
+                NetworkDriverCollections collections = new NetworkDriverCollections();
+                collections.DriverUdp = NetworkDriver.Create(new DummyNetworkInterface());
+                collections.DriverWs = NetworkDriver.Create(new DummyNetworkInterface());
+                collections.DriverRelayUdp = NetworkDriver.Create(new DummyNetworkInterface());
+                collections.DriverRelayWs = NetworkDriver.Create(new DummyNetworkInterface());
+
+                return collections;
+            }
+        }
+
+        private NetworkDriverCollections ConstructClientNetworkDriverCollection(ClientNetworkProtocol clientNetworkProtocol)
+        {
+            if (clientNetworkProtocol == ClientNetworkProtocol.None)
+            {
+                throw new Exception("No Client Network Protocol Chosen");
+            }
+
+            NetworkDriverCollections drivers = default;
+
+            if (clientNetworkProtocol == ClientNetworkProtocol.UDP)
+                drivers.DriverUdp = ConstructDriverUDP(false);
+
+            if (clientNetworkProtocol == ClientNetworkProtocol.WebSocket)
+                drivers.DriverWs = ConstructDriverWS(false);
+
+            if (clientNetworkProtocol == ClientNetworkProtocol.RelayUDP)
+                drivers.DriverRelayUdp = ConstructDriverRelayUDP();
+
+            if (clientNetworkProtocol == ClientNetworkProtocol.RelayWebSocket)
+                drivers.DriverRelayWs = ConstructDriverRelayWS();
+
+            return drivers;
+        }
+
+        private NetworkDriverCollections ConstructServerNetworkDriverCollection(ServerNetworkProtocol serverNetworkProtocol)
+        {
+            if (serverNetworkProtocol == ServerNetworkProtocol.None)
+            {
+                throw new Exception("No Server Network Protocol Chosen");
+            }
+
+            NetworkDriverCollections drivers = default;
+
+            if (serverNetworkProtocol.HasFlag(ServerNetworkProtocol.UDP))
+                drivers.DriverUdp = ConstructDriverUDP(true);
+
+            if (serverNetworkProtocol.HasFlag(ServerNetworkProtocol.WebSocket))
+                drivers.DriverWs = ConstructDriverWS(true);
+
+            if (serverNetworkProtocol.HasFlag(ServerNetworkProtocol.RelayUDP))
+                drivers.DriverRelayUdp = ConstructDriverRelayUDP();
+
+            if (serverNetworkProtocol.HasFlag(ServerNetworkProtocol.RelayWebSocket))
+                drivers.DriverRelayWs = ConstructDriverRelayWS();
+
+            return drivers;
+        }
+
         public override void Run(RunMode mode, int port)
         {
             bool isServer = mode == RunMode.Server;
 
-            NetworkDriver driverUdp = ConstructDriverUDP(isServer);
-            NetworkDriver driverWs = ConstructDriverWS(isServer);
-            NetworkDriver driverRelayUdp = ConstructDriverRelayUDP();
-            NetworkDriver driverRelayWs = ConstructDriverRelayWS();
+            if (isServer)
+            {
+                RunServerMode(port);
+                return;
+            }
+
+            RunClientMode();
+        }
+
+        private void RunServerMode(int port)
+        {
+            NetworkDriverCollections drivers = ConstructServerNetworkDriverCollection(ServerProtocol);
+
+            NetworkDriver driverUdp = drivers.DriverUdp;
+            NetworkDriver driverWs = drivers.DriverWs;
+            NetworkDriver driverRelayUdp = drivers.DriverRelayUdp;
+            NetworkDriver driverRelayWs = drivers.DriverRelayWs;
 
             MultiNetworkDriver multiDriver = MultiNetworkDriver.Create();
 
-            if (Engine.IsServer)
+            int listenPort = port;
+
+            if (ServerProtocol == ServerNetworkProtocol.None)
             {
-                int listenPort = port;
-
-                if (ServerProtocol == ServerNetworkProtocol.None)
-                {
-                    throw new Exception($"No Server Protocol was chosen");
-                }
-
-                if (ServerProtocol.HasFlag(ServerNetworkProtocol.UDP))
-                {
-                    BindAndListenDriverTo(in driverUdp, listenPort);
-                    listenPort++;
-                }
-
-                if (ServerProtocol.HasFlag(ServerNetworkProtocol.WebSocket))
-                {
-                    BindAndListenDriverTo(in driverWs, listenPort);
-                    listenPort++;
-                }
-
-                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayUDP))
-                {
-                    BindAndListenDriverTo(in driverRelayUdp, listenPort);
-                    listenPort++;
-                }
-
-                if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayWebSocket))
-                {
-                    BindAndListenDriverTo(in driverRelayWs, listenPort);
-                    listenPort++;
-                }
+                throw new Exception($"No Server Protocol was chosen");
             }
 
-            multiDriver.AddDriver(driverUdp);
-            multiDriver.AddDriver(driverWs);
-            multiDriver.AddDriver(driverRelayUdp);
-            multiDriver.AddDriver(driverRelayWs);
+            if (ServerProtocol.HasFlag(ServerNetworkProtocol.UDP))
+            {
+                BindAndListenDriverTo(in driverUdp, listenPort);
+                multiDriver.AddDriver(driverUdp);
+                listenPort++;
+            }
+
+            if (ServerProtocol.HasFlag(ServerNetworkProtocol.WebSocket))
+            {
+                BindAndListenDriverTo(in driverWs, listenPort);
+                multiDriver.AddDriver(driverWs);
+                listenPort++;
+            }
+
+            if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayUDP))
+            {
+                BindAndListenDriverTo(in driverRelayUdp, listenPort);
+                multiDriver.AddDriver(driverRelayUdp);
+                listenPort++;
+            }
+
+            if (ServerProtocol.HasFlag(ServerNetworkProtocol.RelayWebSocket))
+            {
+                BindAndListenDriverTo(in driverRelayWs, listenPort);
+                multiDriver.AddDriver(driverRelayWs);
+                listenPort++;
+            }
+
+            _driver = multiDriver;
+
+            for (int i = 0; i < Engine.Config.MaxPlayers; i++)
+                _freeConnections.Enqueue(new NetickUnityTransportConnection(this));
+        }
+
+        private void RunClientMode()
+        {
+            NetworkDriverCollections drivers = ConstructClientNetworkDriverCollection(ClientProtocol);
+
+            NetworkDriver driverUdp = drivers.DriverUdp;
+            NetworkDriver driverWs = drivers.DriverWs;
+            NetworkDriver driverRelayUdp = drivers.DriverRelayUdp;
+            NetworkDriver driverRelayWs = drivers.DriverRelayWs;
+
+            MultiNetworkDriver multiDriver = MultiNetworkDriver.Create();
+
+            NetworkDriver.Create();
+
+            if (ClientProtocol == ClientNetworkProtocol.UDP)
+                multiDriver.AddDriver(driverUdp);
+            if (ClientProtocol == ClientNetworkProtocol.WebSocket)
+                multiDriver.AddDriver(driverWs);
+            if (ClientProtocol == ClientNetworkProtocol.RelayUDP)
+                multiDriver.AddDriver(driverRelayUdp);
+            if (ClientProtocol == ClientNetworkProtocol.RelayWebSocket)
+                multiDriver.AddDriver(driverRelayWs);
 
             _driver = multiDriver;
 
@@ -446,14 +561,15 @@ namespace StinkySteak.NShooter.Netick.Transport
 
         public override void Connect(string address, int port, byte[] connectionData, int connectionDataLength)
         {
+            int clientDriverId = 1;
             var endpoint = NetworkEndpoint.Parse(address, (ushort)port);
             if (connectionData != null)
             {
                 _connectionRequestNative.CopyFrom(connectionData);
-                _serverConnection = _driver.Connect((int)ClientProtocol, endpoint, _connectionRequestNative);
+                _serverConnection = _driver.Connect(clientDriverId, endpoint, _connectionRequestNative);
             }
             else
-                _serverConnection = _driver.Connect((int)ClientProtocol, endpoint);
+                _serverConnection = _driver.Connect(clientDriverId, endpoint);
         }
 
         public override void Disconnect(TransportConnection connection)
@@ -574,6 +690,20 @@ namespace StinkySteak.NShooter.Netick.Transport
                         _connections[index] = default;
                 }
             }
+        }
+
+        private struct DummyNetworkInterface : INetworkInterface
+        {
+            public NetworkEndpoint LocalEndpoint { get => default; }
+
+            public int Initialize(ref NetworkSettings settings, ref int packetPadding) => 0;
+            public void Dispose() { }
+
+            public JobHandle ScheduleReceive(ref ReceiveJobArguments arguments, JobHandle dep) => dep;
+            public JobHandle ScheduleSend(ref SendJobArguments arguments, JobHandle dep) => dep;
+
+            public int Bind(NetworkEndpoint endpoint) => 0;
+            public int Listen() => 0;
         }
     }
 }
