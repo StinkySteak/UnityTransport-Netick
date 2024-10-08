@@ -9,8 +9,11 @@ using Netick.Unity;
 using static StinkySteak.NShooter.Netick.Transport.NetickUnityTransport;
 using Unity.Networking.Transport.TLS;
 using Unity.Networking.Transport.Relay;
-using Unity.Services.Relay.Models;
 using Unity.Jobs;
+
+#if RELAY_SDK_INSTALLED
+using Unity.Services.Relay.Models;
+#endif
 
 namespace StinkySteak.NShooter.Netick.Transport
 {
@@ -212,8 +215,10 @@ namespace StinkySteak.NShooter.Netick.Transport
         private const string CONNECTION_TYPE_WS = "ws";
         private const string CONNECTION_TYPE_WSS = "wss";
 
+#if RELAY_SDK_INSTALLED
         public static Allocation Allocation;
         public static JoinAllocation JoinAllocation;
+#endif
 
         private enum RelaySocket
         {
@@ -240,8 +245,8 @@ namespace StinkySteak.NShooter.Netick.Transport
 
         private NetworkDriver ConstructDriverRelay(string connectionType)
         {
+#if RELAY_SDK_INSTALLED
             RelayServerData relayData;
-
             if (Engine.IsServer)
             {
                 if (Allocation == null)
@@ -260,12 +265,14 @@ namespace StinkySteak.NShooter.Netick.Transport
 
                 relayData = new RelayServerData(JoinAllocation, connectionType);
             }
-
             NetworkSettings settings = GetDefaultNetworkSettings();
             settings.WithRelayParameters(ref relayData);
 
             NetworkDriver driver = NetworkDriver.Create(settings);
             return driver;
+#else
+            throw new Exception("Unity Relay SDK is missing. If it's already installed, ensure 'RELAY_SDK_INSTALLED' is added to the scripting define symbols");
+#endif
         }
 
         private string GetRelayConnectionType(RelaySocket socket, bool isSecure)
