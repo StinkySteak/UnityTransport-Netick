@@ -207,10 +207,27 @@ namespace Netick.Transport
 
             public unsafe override void Send(IntPtr ptr, int length)
             {
+                Send(ptr, length, NetworkPipeline.Null);
+            }
+
+            public override void SendUserData(IntPtr ptr, int length, TransportDeliveryMethod transportDeliveryMethod)
+            {
+                if (transportDeliveryMethod == TransportDeliveryMethod.Unreliable)
+                {
+                    Send(ptr, length, NetworkPipeline.Null);
+                    return;
+                }
+
+                Send(ptr, length, Transport._reliablePipeline);
+            }
+
+
+            private void Send(IntPtr ptr, int length, NetworkPipeline pipeline)
+            {
                 if (!Connection.IsCreated)
                     return;
 
-                int beginSendResult = Transport._driver.BeginSend(NetworkPipeline.Null, Connection, out var networkWriter);
+                int beginSendResult = Transport._driver.BeginSend(pipeline, Connection, out var networkWriter);
 
                 if (beginSendResult < 0)
                 {
@@ -237,6 +254,7 @@ namespace Netick.Transport
         private BitBuffer _bitBuffer;
         private byte* _bytesBuffer;
         private int _bytesBufferSize = 2048;
+        private NetworkPipeline _reliablePipeline;
 
         private const int MAX_CONNECTION_REQUEST_SIZE = 200;
         private byte[] _connectionRequestBytes = new byte[MAX_CONNECTION_REQUEST_SIZE];
@@ -564,6 +582,7 @@ namespace Netick.Transport
             }
 
             _driver = multiDriver;
+            _reliablePipeline = _driver.CreatePipeline(typeof(ReliableSequencedPipelineStage));
 
             for (int i = 0; i < Engine.Config.MaxPlayers; i++)
                 _freeConnections.Enqueue(new NetickUnityTransportConnection(this));
@@ -590,6 +609,7 @@ namespace Netick.Transport
                 multiDriver.AddDriver(driverRelayWs);
 
             _driver = multiDriver;
+            _reliablePipeline = _driver.CreatePipeline(typeof(ReliableSequencedPipelineStage));
 
             for (int i = 0; i < Engine.Config.MaxPlayers; i++)
                 _freeConnections.Enqueue(new NetickUnityTransportConnection(this));
