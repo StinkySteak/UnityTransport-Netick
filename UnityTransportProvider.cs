@@ -222,7 +222,7 @@ namespace Netick.Transport
 
                 if (endSendResult < 0)
                 {
-                    Debug.LogError($"[{nameof(UnityTransportProvider)}]: Error begin send: {(StatusCode)beginSendResult}");
+                    Debug.LogError($"[{nameof(UnityTransportProvider)}]: Error begin send: {(StatusCode)endSendResult}");
                 }
             }
         }
